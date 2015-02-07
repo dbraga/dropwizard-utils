@@ -1,0 +1,156 @@
+#!/bin/bash
+### BEGIN INIT INFO
+# Provides:          <application>
+# Required-Start:    $local_fs $remote_fs $network $named $time
+# Required-Stop:     $local_fs $remote_fs $network $named $time
+# Should-Start:      ntp mdadm
+# Should-Stop:       ntp mdadm
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: <short description>
+### END INIT INFO
+#
+ulimit -Hn 65535
+ulimit -Sn 65535
+
+DESC="<description>"
+NAME="<name>"
+ENV="-dev"
+VERSION="<version>"
+NAME_WITH_ENV=<name>
+USER="<user>"
+WORKDIR="<workdir>"
+LOGDIR="<logdir>"
+PIDFILE="/var/run/<name>/<name>.pid"
+RUNDIR="`dirname $PIDFILE`"
+INIT_VERBOSE=yes
+CONFIG_FILE="<locationofconfigfile>/app-config.yml"
+
+STARTUP_LOG="$LOGDIR/startup.log"
+if [ $ENV = "dev" ]; then
+  JAR=${WORKDIR}/$NAME-0.0-SNAPSHOT.jar
+else
+  JAR=${WORKDIR}/$NAME-$VERSION.jar
+fi
+SCRIPTNAME="$0"
+
+# Read configuration variable file if it is present
+[ -r /etc/default/$NAME_WITH_ENV ] && . /etc/default/$NAME_WITH_ENV
+
+
+# Load the VERBOSE setting and other rcS variables
+[ -r /lib/init/vars.sh ] && . /lib/init/vars.sh
+
+# Define LSB log_* functions
+# Depend on lsb-base (>= 3.0-6) to ensure that this file is present
+
+. /lib/lsb/init-functions
+
+# prepare directories and a blank pid file
+[ -d "$RUNDIR" ] || mkdir "$RUNDIR"
+[ -d "$LOGDIR" ] || mkdir "$LOGDIR"
+
+# change the ownership so that $USER can read from and write to
+chown -R $USER:$USER "$RUNDIR" "$LOGDIR"
+
+is_running()
+{
+  if [ -f "$PIDFILE" ]; then
+      PID=$(cat "$PIDFILE" 2>/dev/null)
+      if [ `ps -p $PID | grep java | wc -l` -gt 0 ]; then
+        return 0
+      fi
+  fi
+  return 3
+}
+
+do_start()
+{
+  # Return
+  #   0 if daemon has been started
+  #   1 if daemon was already running
+  #   2 if daemon could not be started
+
+  is_running && return 1
+
+  # create PIDFILE to prevent the race condition
+  touch $PIDFILE
+  # start the daemon in the background 
+  start-stop-daemon -S -c $USER -p "$PIDFILE" -m -d $WORKDIR --background -a $JAVA -- $JAVA_OPTIONS -jar $JAR server ${CONFIG_FILE} > $STARTUP_LOG 2>&1 &
+  # wait for the process to spawn (-m option above didn't work with --background option..)
+  sleep 10
+  # create a PID file
+  ps aux | grep $JAR | grep $JAVA | awk '{print $2}' > $PIDFILE
+  return 0
+}
+
+do_stop()
+{
+  #   0 if daemon has been stopped
+  #   1 if daemon was already stopped
+  #   2 if daemon could not be stopped
+  #   other if a failure occurred
+
+  # stop the service
+  start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile "$PIDFILE"
+  RETVAL=$?
+  [ $RETVAL -eq 2 ] && return 2 # Couldn't stop
+  [ $RETVAL -eq 3 ] && return 3 # Other error
+  rm -f $PIDFILE
+  return $RETVAL
+}
+
+case "$1" in
+  start)
+    [ "$VERBOSE" != no ] && log_daemon_msg "Starting $DESC" "$NAME_WITH_ENV"
+    do_start
+    case "$?" in
+      0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
+      2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
+    esac
+  ;;
+  stop)
+    [ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME_WITH_ENV"
+    do_stop
+    case "$?" in
+        0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
+        2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
+    esac
+    ;;
+  status)
+    is_running
+    stat=$?
+    case "$stat" in
+      0) log_daemon_msg "$DESC $NAME_WITH_ENV is running" ;;
+      1) log_daemon_msg "could not access pidfile for $DESC $NAME_WITH_ENV" ;;
+      *) log_daemon_msg "$DESC $NAME_WITH_ENV is not running" ;;
+    esac
+    exit "$stat"
+    ;;
+  restart|force-reload)
+    #
+    # If the "reload" option is implemented then remove the
+    # 'force-reload' alias
+    #
+    log_daemon_msg "Restarting $DESC" "$NAME_WITH_ENV"
+    do_stop
+    case "$?" in
+      0|1)
+        do_start
+        case "$?" in
+            0) log_end_msg 0 ;;
+            1) log_end_msg 1 ;; # Old process is still running
+            *) log_end_msg 1 ;; # Failed to start
+        esac
+        ;;
+      *)
+        # Failed to stop
+        log_end_msg 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "Usage: $SCRIPTNAME {start|stop|status|restart|force-reload}" >&2
+    exit 3
+    ;;
+esac
